@@ -425,6 +425,25 @@ func (esg *expressionSQLGenerator) aliasedExpressionSQL(b sb.SQLBuilder, aliased
 }
 
 // Generates SQL for a BooleanExpresion (e.g. I("a").Eq(2) -> "a" = 2)
+// inValueList returns the right-hand side of an IN or NOT IN as a slice of
+// values. A subquery or other expression, and []byte, are not value lists.
+func inValueList(op exp.BooleanOperation, rhs interface{}) (reflect.Value, bool) {
+	if op != exp.InOp && op != exp.NotInOp {
+		return reflect.Value{}, false
+	}
+	if _, ok := rhs.(exp.Expression); ok {
+		return reflect.Value{}, false
+	}
+	if _, ok := rhs.([]byte); ok {
+		return reflect.Value{}, false
+	}
+	v := reflect.Indirect(reflect.ValueOf(rhs))
+	if v.Kind() != reflect.Slice {
+		return reflect.Value{}, false
+	}
+	return v, true
+}
+
 func (esg *expressionSQLGenerator) booleanExpressionSQL(b sb.SQLBuilder, operator exp.BooleanExpression) {
 	b.WriteRunes(esg.dialectOptions.LeftParenRune)
 	esg.Generate(b, operator.LHS())
@@ -459,6 +478,10 @@ func (esg *expressionSQLGenerator) booleanExpressionSQL(b sb.SQLBuilder, operato
 	if (operatorOp == exp.IsOp || operatorOp == exp.IsNotOp) && rhs == nil && !esg.dialectOptions.BooleanDataTypeSupported {
 		// e.g. for SQL server dialect which does not support "IS @p1" for "IS NULL"
 		b.Write(esg.dialectOptions.Null)
+	} else if list, ok := inValueList(operatorOp, rhs); ok {
+		// IN and NOT IN take a list of values, never an array, even for a
+		// dialect that renders slices as arrays.
+		esg.sliceIdentifierSQL(b, list)
 	} else {
 		esg.Generate(b, rhs)
 	}
